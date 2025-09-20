@@ -541,6 +541,9 @@ def streamlit_app():
         help="Add space for writing answers in the LaTeX output"
     )
     
+    # Initialize the question generator
+    generator = QuestionGenerator()
+    
     # Generate questions button
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -582,8 +585,9 @@ def streamlit_app():
         
         # Generate questions
         with st.spinner("Analyzing text and generating questions..."):
-            generator = QuestionGenerator()
             
+        # Generate questions
+        with st.spinner("Analyzing text and generating questions..."):
             try:
                 questions = generator.generate_questions_from_text(
                     text_content,
