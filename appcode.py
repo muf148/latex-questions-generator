@@ -3,15 +3,16 @@
 Question Generator from Book/Lecture Notes
 ==========================================
 
-This script processes text content (books, lecture notes) and generates
+This script processes text content (books, lecture notes, PDFs) and generates
 questions on specified topics with LaTeX-formatted output.
 
 Requirements:
 - nltk (for text processing)
+- PyPDF2 or pdfplumber (for PDF processing)
 - transformers (optional, for advanced NLP)
 
 Install dependencies:
-pip install nltk
+pip install nltk PyPDF2 pdfplumber
 """
 
 import re
@@ -19,6 +20,7 @@ import random
 import argparse
 from typing import List, Dict, Tuple
 from pathlib import Path
+import io
 
 try:
     import nltk
@@ -28,6 +30,20 @@ try:
     nltk_available = True
 except ImportError:
     nltk_available = False
+
+# PDF processing imports
+pdf_available = False
+try:
+    import PyPDF2
+    pdf_library = 'PyPDF2'
+    pdf_available = True
+except ImportError:
+    try:
+        import pdfplumber
+        pdf_library = 'pdfplumber'
+        pdf_available = True
+    except ImportError:
+        pdf_library = None
 
 class QuestionGenerator:
     def __init__(self):
@@ -79,14 +95,107 @@ class QuestionGenerator:
                 self.lemmatizer = None
 
     def load_text(self, file_path: str) -> str:
-        """Load text content from a file."""
+        """Load text content from a file (supports .txt, .md, .pdf)."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                return file.read()
+            file_extension = Path(file_path).suffix.lower()
+            
+            if file_extension == '.pdf':
+                return self._load_pdf(file_path)
+            else:
+                # Handle text files
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    return file.read()
+                    
         except FileNotFoundError:
             raise FileNotFoundError(f"File not found: {file_path}")
         except Exception as e:
             raise Exception(f"Error reading file: {e}")
+    
+    def _load_pdf(self, file_path: str) -> str:
+        """Extract text from PDF file."""
+        if not pdf_available:
+            raise ImportError("PDF processing not available. Install PyPDF2 or pdfplumber: pip install PyPDF2 pdfplumber")
+        
+        text = ""
+        
+        if pdf_library == 'PyPDF2':
+            try:
+                with open(file_path, 'rb') as file:
+                    pdf_reader = PyPDF2.PdfReader(file)
+                    for page in pdf_reader.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+            except Exception as e:
+                raise Exception(f"Error reading PDF with PyPDF2: {e}")
+                
+        elif pdf_library == 'pdfplumber':
+            try:
+                with pdfplumber.open(file_path) as pdf:
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+            except Exception as e:
+                raise Exception(f"Error reading PDF with pdfplumber: {e}")
+        
+        if not text.strip():
+            raise Exception("No text could be extracted from the PDF file")
+            
+        return text
+    
+    def load_text_from_bytes(self, file_bytes: bytes, filename: str) -> str:
+        """Load text content from bytes (for Streamlit file uploads)."""
+        file_extension = Path(filename).suffix.lower()
+        
+        if file_extension == '.pdf':
+            return self._load_pdf_from_bytes(file_bytes)
+        else:
+            # Handle text files
+            try:
+                return file_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                # Try other encodings
+                for encoding in ['latin-1', 'cp1252', 'iso-8859-1']:
+                    try:
+                        return file_bytes.decode(encoding)
+                    except UnicodeDecodeError:
+                        continue
+                raise Exception("Could not decode text file. Please ensure it's in a supported encoding.")
+    
+    def _load_pdf_from_bytes(self, file_bytes: bytes) -> str:
+        """Extract text from PDF bytes."""
+        if not pdf_available:
+            raise ImportError("PDF processing not available. Install PyPDF2 or pdfplumber: pip install PyPDF2 pdfplumber")
+        
+        text = ""
+        
+        if pdf_library == 'PyPDF2':
+            try:
+                pdf_file = io.BytesIO(file_bytes)
+                pdf_reader = PyPDF2.PdfReader(pdf_file)
+                for page in pdf_reader.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
+            except Exception as e:
+                raise Exception(f"Error reading PDF with PyPDF2: {e}")
+                
+        elif pdf_library == 'pdfplumber':
+            try:
+                pdf_file = io.BytesIO(file_bytes)
+                with pdfplumber.open(pdf_file) as pdf:
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+            except Exception as e:
+                raise Exception(f"Error reading PDF with pdfplumber: {e}")
+        
+        if not text.strip():
+            raise Exception("No text could be extracted from the PDF file")
+            
+        return text
 
     def preprocess_text(self, text: str) -> str:
         """Clean and preprocess the input text."""
@@ -273,7 +382,7 @@ class QuestionGenerator:
 
 def main():
     parser = argparse.ArgumentParser(description='Generate questions from book/lecture notes')
-    parser.add_argument('input_file', help='Path to the text file containing notes')
+    parser.add_argument('input_file', help='Path to the text/PDF file containing notes')
     parser.add_argument('topic', help='Topic to generate questions about')
     parser.add_argument('-n', '--num-questions', type=int, default=5,
                        help='Number of questions to generate (default: 5)')
@@ -387,9 +496,9 @@ def streamlit_app():
     
     # File upload
     uploaded_file = st.file_uploader(
-        "Upload your notes or book text",
-        type=['txt', 'md'],
-        help="Upload a text file containing your notes or book content"
+        "Upload your notes, book text, or PDF",
+        type=['txt', 'md', 'pdf'],
+        help="Upload a text file or PDF containing your notes or book content"
     )
     
     # Text input area as alternative
@@ -450,7 +559,21 @@ def streamlit_app():
         # Get text content
         text_content = ""
         if uploaded_file is not None:
-            text_content = str(uploaded_file.read(), "utf-8")
+            try:
+                with st.spinner("Processing uploaded file..."):
+                    file_bytes = uploaded_file.read()
+                    text_content = generator.load_text_from_bytes(file_bytes, uploaded_file.name)
+                    
+                    # Show file info
+                    file_size = len(file_bytes) / 1024  # KB
+                    st.success(f"✅ Successfully loaded {uploaded_file.name} ({file_size:.1f} KB)")
+                    
+            except Exception as e:
+                st.error(f"Error processing file: {str(e)}")
+                if "PDF processing not available" in str(e):
+                    st.info("💡 To process PDF files, install: `pip install PyPDF2 pdfplumber`")
+                return
+                
         elif direct_text.strip():
             text_content = direct_text
         else:
@@ -567,11 +690,16 @@ def streamlit_app():
         st.markdown("""
         ### How to Use the Question Generator:
         
-        1. **Upload your content**: Either upload a text file or paste your notes directly
+        1. **Upload your content**: Upload a text file (.txt, .md) or PDF file, or paste your notes directly
         2. **Specify a topic**: Enter the specific topic you want questions about
         3. **Configure options**: Use the sidebar to set number of questions, types, etc.
         4. **Generate**: Click the generate button and wait for processing
         5. **Download**: Use the LaTeX code to create a PDF document
+        
+        ### Supported File Formats:
+        - **Text Files**: .txt, .md (plain text, markdown)
+        - **PDF Files**: .pdf (text will be extracted automatically)
+        - **Direct Input**: Copy and paste text directly into the text area
         
         ### Question Types:
         - **Definition**: Basic concept definitions
@@ -586,6 +714,8 @@ def streamlit_app():
         - Longer, more detailed text produces better questions
         - Use specific topics rather than very broad ones
         - The tool works best with educational content
+        - **PDF Support**: Install `PyPDF2` or `pdfplumber` for PDF processing
+        - **Large PDFs**: May take longer to process, be patient during upload
         """)
     
     # Footer
@@ -610,6 +740,10 @@ if __name__ == "__main__":
                 print("Warning: NLTK not available. Using basic text processing.")
                 print("For better results, install NLTK: pip install nltk")
                 print()
+            if not pdf_available:
+                print("Warning: PDF processing not available.")
+                print("For PDF support, install: pip install PyPDF2 pdfplumber")
+                print()
             main()
     except ImportError:
         # Streamlit not available, run as regular script
@@ -618,5 +752,9 @@ if __name__ == "__main__":
         if not nltk_available:
             print("Warning: NLTK not available. Using basic text processing.")
             print("For better results, install NLTK: pip install nltk")
+            print()
+        if not pdf_available:
+            print("Warning: PDF processing not available.")
+            print("For PDF support, install: pip install PyPDF2 pdfplumber")
             print()
         main()
