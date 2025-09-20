@@ -1,0 +1,2 @@
+pip install streamlit nltk
+python -m nltk.downloader punkt stopwords wordnet
